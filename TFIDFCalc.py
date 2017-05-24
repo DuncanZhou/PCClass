@@ -13,11 +13,18 @@ from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from mpi4py import MPI
-tweets_path = 'TestTweets/'
+tweets_path = '%dUsers/' % 100
 
 tags = 10
 
-
+def getStopWords(path):
+    stopwords = set()
+    with open(path,"r") as f:
+        lines = f.readlines()
+    for line in lines:
+        stopwords.add(line.replace("\r\n","").rstrip())
+    return stopwords
+stopwords = getStopWords("/home/duncan/stopwords.txt")
 # 公共通信变量
 comm = MPI.COMM_WORLD
 # 当前进程获取当前进程的id
@@ -27,7 +34,6 @@ comm_size = comm.Get_size()
 
 # 计算一段文本中的tags,返回tag列表
 def GetTags(text):
-    twitter_stop_words = ["from","TO","to","https","RT","URL","in","re","thank","thanks","today","yesterday","tomorrow","night","tonight","day","year","last","oh","yeah","amp"]
     '''
 
     :param text: 文本
@@ -43,7 +49,7 @@ def GetTags(text):
     words = word_tokenize(text)
     for word in words:
         # 去除停用词
-        if word not in (stopwords.words("english") and twitter_stop_words):
+        if word not in stopwords:
             if(len(word) > 2 and word.isalpha()):
                 wordslist.append(word.lower())
     # 继续对词性进行标注
@@ -72,15 +78,14 @@ def GetTags(text):
         # 动名词 | 动词 + 形容词 +名词
         if (pos[i])[1][0] == 'V' and (pos[i + 1][1][0] == 'N' or (pos[i + 1][1][0] == "J" and pos[i + 2][1][0] == "N")):
             if pos[i + 1][1][0] == 'N':
-                suffix = lemmatizer.lemmatize(pos[i + 1][0],'a')
-            else:
                 suffix = lemmatizer.lemmatize(pos[i + 1][0],'n')
+            else:
+                suffix = lemmatizer.lemmatize(pos[i + 1][0],'a')
             phase += lemmatizer.lemmatize((pos[i])[0],'v') + " " + suffix
             i = i + 2
             while(i < len(pos) and (pos[i])[1][0] == 'N'):
                 phase += " " + lemmatizer.lemmatize((pos[i])[0])
                 i += 1
-
             multicandidates.append(phase)
         # 形容词　+ 名词
         elif(pos[i][1][0] == "J" and pos[i + 1][1][0] == "N"):
@@ -113,6 +118,12 @@ def CalcTF(words,number):
         worddic[word] = TF
     # 将字典按照词频排序,取前10个
     worddic = sorted(worddic.items(),key = lambda val:val[1],reverse=True)
+    if(len(worddic) < number):
+        # 不足number需要填充
+        i = len(worddic)
+        while(i < number):
+            worddic.append(("null",0))
+            i += 1
     return worddic[:number]
 
 
@@ -179,7 +190,11 @@ if __name__ == '__main__':
         start = lineid = comm_rank * block_size
         tags_tfidf = []
         while(lineid < block_size + start and lineid < users_number * tags):
-
+            # 是填充的,则不匹配了,直接加入tfidf列表("null",0)
+            if((lines[lineid].split("\t"))[0] == "null"):
+                tags_tfidf.append(("null",0))
+                lineid += 1
+                continue
             # 对lines[i]去计算它的idf,在其他用户tags中搜寻
             user_id = int(math.ceil((lineid + 1) * 1.0 / tags))
             # 所以该用户tags行标在[(user_id - 1) * tags,user_id * tags - 1]
@@ -188,13 +203,18 @@ if __name__ == '__main__':
             while(search_rowid < users_number * tags):
                 # 当在其中一个用户的tags中搜寻到后直接跳至下一个用户的tags
                 if(search_rowid < (user_id - 1) * tags or search_rowid > user_id * tags - 1):
-                    if((lines[search_rowid].split("\t"))[0] == (lines[lineid].split("\t"))[0]):
-                        count += 1
-                        # 跳到下一个用户tags开始处
-                        current_user_id = int(math.ceil((search_rowid + 1) * 1.0 / tags))
-                        search_rowid = current_user_id * tags
-                    else:
-                        search_rowid += 1
+                    try:
+                        if((lines[search_rowid].split("\t"))[0] == (lines[lineid].split("\t"))[0]):
+                            count += 1
+                            # 跳到下一个用户tags开始处
+                            current_user_id = int(math.ceil((search_rowid + 1) * 1.0 / tags))
+                            search_rowid = current_user_id * tags
+                        else:
+                            search_rowid += 1
+                    except Exception as e:
+                        # 如果行号超出异常
+                        print search_rowid,lineid
+                        print lines[search_rowid],lines[lineid]
                 else:
                     # 在所需要判断的用户的tags范围内,则跳出
                     search_rowid = user_id * tags
