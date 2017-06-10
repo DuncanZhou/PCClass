@@ -8,4 +8,4 @@
 计算短语的TFIDF特征
 
 [实验结果]
-实验结果见博客地址:http://duncazhou.github.io
+实验结果见博客地址:http://duncanzhou.github.io
